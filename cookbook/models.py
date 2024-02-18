@@ -320,10 +320,18 @@ class Space(ExportModelOperationsMixin('space'), models.Model):
         BookmarkletImport.objects.filter(space=self).delete()
         CustomFilter.objects.filter(space=self).delete()
 
+        Property.objects.filter(space=self).delete()
+        PropertyType.objects.filter(space=self).delete()
+
         Comment.objects.filter(recipe__space=self).delete()
-        Keyword.objects.filter(space=self).delete()
         Ingredient.objects.filter(space=self).delete()
-        Food.objects.filter(space=self).delete()
+        Keyword.objects.filter(space=self).delete()
+
+        # delete food in batches because treabeard might fail to delete otherwise
+        while Food.objects.filter(space=self).count() > 0:
+            pks = Food.objects.filter(space=self).values_list('pk')[:200]
+            Food.objects.filter(pk__in=pks).delete()
+
         Unit.objects.filter(space=self).delete()
         Step.objects.filter(space=self).delete()
         NutritionInformation.objects.filter(space=self).delete()
@@ -347,9 +355,11 @@ class Space(ExportModelOperationsMixin('space'), models.Model):
         SupermarketCategory.objects.filter(space=self).delete()
         Supermarket.objects.filter(space=self).delete()
 
-        InviteLink.objects.filter(space=self).delete()
         UserFile.objects.filter(space=self).delete()
+        UserSpace.objects.filter(space=self).delete()
         Automation.objects.filter(space=self).delete()
+        InviteLink.objects.filter(space=self).delete()
+        TelegramBot.objects.filter(space=self).delete()
         self.delete()
 
     def get_owner(self):
@@ -442,6 +452,7 @@ class UserPreference(models.Model, PermissionModelMixin):
             self.use_fractions = FRACTION_PREF_DEFAULT
 
         return super().save(*args, **kwargs)
+
     def __str__(self):
         return str(self.user)
 
@@ -644,6 +655,32 @@ class Food(ExportModelOperationsMixin('food'), TreeModel, PermissionModelMixin):
     def __str__(self):
         return self.name
 
+    def merge_into(self, target):
+        """
+        very simple merge function that replaces the current food with the target food
+        also replaces a few attributes on the target field if they were empty before
+        :param target: target food object
+        :return: target with data merged
+        """
+        if self == target:
+            raise ValueError('Cannot merge an object with itself')
+
+        if self.space != target.space:
+            raise RuntimeError('Cannot merge objects from different spaces')
+
+        try:
+            if target in self.get_descendants_and_self():
+                raise RuntimeError('Cannot merge parent (source) with child (target) object')
+        except AttributeError:
+            pass  # AttributeError is raised when the object is not a tree and thus does not have the get_descendants_and_self() function
+
+        self.properties.all().delete()
+        self.properties.clear()
+        Ingredient.objects.filter(food=self).update(food=target)
+        ShoppingListEntry.objects.filter(food=self).update(food=target)
+        self.delete()
+        return target
+
     def delete(self):
         if self.ingredient_set.all().exclude(step=None).count() > 0:
             raise ProtectedError(self.name + _(" is part of a recipe step and cannot be deleted"), self.ingredient_set.all().exclude(step=None))
@@ -835,7 +872,7 @@ class PropertyType(models.Model, PermissionModelMixin):
 
 
 class Property(models.Model, PermissionModelMixin):
-    property_amount = models.DecimalField(default=0, decimal_places=4, max_digits=32)
+    property_amount = models.DecimalField(default=None, null=True, decimal_places=4, max_digits=32)
     property_type = models.ForeignKey(PropertyType, on_delete=models.PROTECT)
 
     import_food_id = models.IntegerField(null=True, blank=True)  # field to hold food id when importing properties from the open data project
@@ -983,6 +1020,7 @@ class RecipeBook(ExportModelOperationsMixin('book'), models.Model, PermissionMod
     shared = models.ManyToManyField(User, blank=True, related_name='shared_with')
     created_by = models.ForeignKey(User, on_delete=models.CASCADE)
     filter = models.ForeignKey('cookbook.CustomFilter', null=True, blank=True, on_delete=models.SET_NULL)
+    order = models.IntegerField(default=0)
 
     space = models.ForeignKey(Space, on_delete=models.CASCADE)
     objects = ScopedManager(space='space')
