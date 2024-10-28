@@ -1,4 +1,3 @@
-import traceback
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -31,10 +30,10 @@ from cookbook.models import (Automation, BookmarkletImport, Comment, CookLog, Cu
                              ExportLog, Food, FoodInheritField, ImportLog, Ingredient, InviteLink,
                              Keyword, MealPlan, MealType, NutritionInformation, Property,
                              PropertyType, Recipe, RecipeBook, RecipeBookEntry, RecipeImport,
-                             ShareLink, ShoppingList, ShoppingListEntry, ShoppingListRecipe, Space,
+                             ShareLink, ShoppingListEntry, ShoppingListRecipe, Space,
                              Step, Storage, Supermarket, SupermarketCategory,
                              SupermarketCategoryRelation, Sync, SyncLog, Unit, UnitConversion,
-                             UserFile, UserPreference, UserSpace, ViewLog)
+                             UserFile, UserPreference, UserSpace, ViewLog, ConnectorConfig)
 from cookbook.templatetags.custom_tags import markdown
 from recipes.settings import AWS_ENABLED, MEDIA_URL
 
@@ -82,14 +81,12 @@ class ExtendedRecipeMixin(serializers.ModelSerializer):
 class OpenDataModelMixin(serializers.ModelSerializer):
 
     def create(self, validated_data):
-        if 'open_data_slug' in validated_data and validated_data['open_data_slug'] is not None and validated_data[
-            'open_data_slug'].strip() == '':
+        if 'open_data_slug' in validated_data and validated_data['open_data_slug'] is not None and validated_data['open_data_slug'].strip() == '':
             validated_data['open_data_slug'] = None
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        if 'open_data_slug' in validated_data and validated_data['open_data_slug'] is not None and validated_data[
-            'open_data_slug'].strip() == '':
+        if 'open_data_slug' in validated_data and validated_data['open_data_slug'] is not None and validated_data['open_data_slug'].strip() == '':
             validated_data['open_data_slug'] = None
         return super().update(instance, validated_data)
 
@@ -336,8 +333,7 @@ class UserSpaceSerializer(WritableNestedModelSerializer):
 
     class Meta:
         model = UserSpace
-        fields = (
-        'id', 'user', 'space', 'groups', 'active', 'internal_note', 'invite_link', 'created_at', 'updated_at',)
+        fields = ('id', 'user', 'space', 'groups', 'active', 'internal_note', 'invite_link', 'created_at', 'updated_at',)
         read_only_fields = ('id', 'invite_link', 'created_at', 'updated_at', 'space')
 
 
@@ -359,7 +355,7 @@ class MealTypeSerializer(SpacedModelSerializer, WritableNestedModelSerializer):
     class Meta:
         list_serializer_class = SpaceFilterSerializer
         model = MealType
-        fields = ('id', 'name', 'order', 'color', 'default', 'created_by')
+        fields = ('id', 'name', 'order', 'time', 'color', 'default', 'created_by')
         read_only_fields = ('created_by',)
 
 
@@ -416,6 +412,27 @@ class StorageSerializer(SpacedModelSerializer):
 
         extra_kwargs = {
             'password': {'write_only': True},
+            'token': {'write_only': True},
+        }
+
+
+class ConnectorConfigConfigSerializer(SpacedModelSerializer):
+
+    def create(self, validated_data):
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
+
+    class Meta:
+        model = ConnectorConfig
+        fields = (
+            'id', 'name', 'url', 'token', 'todo_entity', 'enabled',
+            'on_shopping_list_entry_created_enabled', 'on_shopping_list_entry_updated_enabled',
+            'on_shopping_list_entry_deleted_enabled', 'supports_description_field', 'created_by'
+        )
+
+        read_only_fields = ('created_by',)
+
+        extra_kwargs = {
             'token': {'write_only': True},
         }
 
@@ -772,8 +789,7 @@ class IngredientSerializer(IngredientSimpleSerializer):
 
 class StepSerializer(WritableNestedModelSerializer, ExtendedRecipeMixin):
     ingredients = IngredientSerializer(many=True)
-    ingredients_markdown = serializers.SerializerMethodField('get_ingredients_markdown')
-    ingredients_vue = serializers.SerializerMethodField('get_ingredients_vue')
+    instructions_markdown = serializers.SerializerMethodField('get_instructions_markdown')
     file = UserFileViewSerializer(allow_null=True, required=False)
     step_recipe_data = serializers.SerializerMethodField('get_step_recipe_data')
     recipe_filter = 'steps'
@@ -782,10 +798,7 @@ class StepSerializer(WritableNestedModelSerializer, ExtendedRecipeMixin):
         validated_data['space'] = self.context['request'].space
         return super().create(validated_data)
 
-    def get_ingredients_vue(self, obj):
-        return obj.get_instruction_render()
-
-    def get_ingredients_markdown(self, obj):
+    def get_instructions_markdown(self, obj):
         return obj.get_instruction_render()
 
     def get_step_recipes(self, obj):
@@ -800,8 +813,8 @@ class StepSerializer(WritableNestedModelSerializer, ExtendedRecipeMixin):
     class Meta:
         model = Step
         fields = (
-            'id', 'name', 'instruction', 'ingredients', 'ingredients_markdown',
-            'ingredients_vue', 'time', 'order', 'show_as_header', 'file', 'step_recipe',
+            'id', 'name', 'instruction', 'ingredients', 'instructions_markdown',
+            'time', 'order', 'show_as_header', 'file', 'step_recipe',
             'step_recipe_data', 'numrecipe', 'show_ingredients_table'
         )
 
@@ -845,8 +858,7 @@ class UnitConversionSerializer(WritableNestedModelSerializer, OpenDataModelMixin
 
     class Meta:
         model = UnitConversion
-        fields = (
-        'id', 'name', 'base_amount', 'base_unit', 'converted_amount', 'converted_unit', 'food', 'open_data_slug')
+        fields = ('id', 'name', 'base_amount', 'base_unit', 'converted_amount', 'converted_unit', 'food', 'open_data_slug')
 
 
 class NutritionInformationSerializer(serializers.ModelSerializer):
@@ -871,6 +883,13 @@ class RecipeBaseSerializer(WritableNestedModelSerializer):
             return True
         else:
             return False
+
+
+class CommentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comment
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'created_by', 'updated_at', ]
 
 
 class RecipeOverviewSerializer(RecipeBaseSerializer):
@@ -901,7 +920,7 @@ class RecipeSerializer(RecipeBaseSerializer):
     nutrition = NutritionInformationSerializer(allow_null=True, required=False)
     properties = PropertySerializer(many=True, required=False)
     steps = StepSerializer(many=True)
-    keywords = KeywordSerializer(many=True)
+    keywords = KeywordSerializer(many=True, required=False)
     shared = UserSerializer(many=True, required=False)
     rating = CustomDecimalField(required=False, allow_null=True, read_only=True)
     last_cooked = serializers.DateTimeField(required=False, allow_null=True, read_only=True)
@@ -947,12 +966,6 @@ class RecipeImageSerializer(WritableNestedModelSerializer):
 class RecipeImportSerializer(SpacedModelSerializer):
     class Meta:
         model = RecipeImport
-        fields = '__all__'
-
-
-class CommentSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Comment
         fields = '__all__'
 
 
@@ -1017,7 +1030,7 @@ class MealPlanSerializer(SpacedModelSerializer, WritableNestedModelSerializer):
     shared = UserSerializer(many=True, required=False, allow_null=True)
     shopping = serializers.SerializerMethodField('in_shopping')
 
-    to_date = serializers.DateField(required=False)
+    to_date = serializers.DateTimeField(required=False)
 
     def get_note_markdown(self, obj):
         return markdown(obj.note)
@@ -1150,7 +1163,7 @@ class ShoppingListEntrySerializer(WritableNestedModelSerializer):
             'recipe_mealplan',
             'created_by', 'created_at', 'updated_at', 'completed_at', 'delay_until'
         )
-        read_only_fields = ('id', 'created_by', 'created_at','updated_at',)
+        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at',)
 
 
 class ShoppingListEntryBulkSerializer(serializers.Serializer):
@@ -1165,37 +1178,6 @@ class ShoppingListEntryCheckedSerializer(serializers.ModelSerializer):
         fields = ('id', 'checked')
 
 
-# TODO deprecate
-class ShoppingListSerializer(WritableNestedModelSerializer):
-    recipes = ShoppingListRecipeSerializer(many=True, allow_null=True)
-    entries = ShoppingListEntrySerializer(many=True, allow_null=True)
-    shared = UserSerializer(many=True)
-    supermarket = SupermarketSerializer(allow_null=True)
-
-    def create(self, validated_data):
-        validated_data['space'] = self.context['request'].space
-        validated_data['created_by'] = self.context['request'].user
-        return super().create(validated_data)
-
-    class Meta:
-        model = ShoppingList
-        fields = (
-            'id', 'uuid', 'note', 'recipes', 'entries',
-            'shared', 'finished', 'supermarket', 'created_by', 'created_at'
-        )
-        read_only_fields = ('id', 'created_by',)
-
-
-# TODO deprecate
-class ShoppingListAutoSyncSerializer(WritableNestedModelSerializer):
-    entries = ShoppingListEntryCheckedSerializer(many=True, allow_null=True)
-
-    class Meta:
-        model = ShoppingList
-        fields = ('id', 'entries',)
-        read_only_fields = ('id',)
-
-
 class ShareLinkSerializer(SpacedModelSerializer):
     class Meta:
         model = ShareLink
@@ -1203,6 +1185,8 @@ class ShareLinkSerializer(SpacedModelSerializer):
 
 
 class CookLogSerializer(serializers.ModelSerializer):
+    created_by = UserSerializer(read_only=True)
+
     def create(self, validated_data):
         validated_data['created_by'] = self.context['request'].user
         validated_data['space'] = self.context['request'].space
@@ -1210,7 +1194,7 @@ class CookLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CookLog
-        fields = ('id', 'recipe', 'servings', 'rating', 'created_by', 'created_at')
+        fields = ('id', 'recipe', 'servings', 'rating', 'comment', 'created_by', 'created_at', 'updated_at')
         read_only_fields = ('id', 'created_by')
 
 
